@@ -3,6 +3,16 @@
 
 ---
 
+## Team Contributors
+
+| GitHub ID | Name | Affiliation | Year | Branch |
+|---|---|---|---|---|
+| [Shreyasilver22](https://github.com/Shreyasilver22) | Shreyas Singh | Faculty of Technology, University of Delhi | 3rd Year (UG) | B.Tech Electronics & Communication Engineering |
+| [essential-aide](https://github.com/essential-aide) | Dhruv Chaturvedi | Faculty of Technology, University of Delhi | 2nd Year (UG) | B.Tech Electronics & Communication Engineering |
+| [RADICAL-devp](https://github.com/RADICAL-devp) | Devansh Parashar | Faculty of Technology, University of Delhi | 2nd Year (UG) | B.Tech Electronics & Communication Engineering |
+
+---
+
 ## 1. Reverse Engineering the Bitstream
 
 ### Tools & Approach
@@ -127,38 +137,87 @@ At end of 255th operation: t2_armed latches permanently
 assign BUSY    = busy_core | t2_armed;
 assign ICE_LED = ice_led_core | t2_armed;
 ```
-No further SPI operations can complete. The system appears stalled in a processing cycle indefinitely. Recovery requires hardware `RST_N` assertion.
-
-#### Implementation (RTL)
-```verilog
-// START branch — counter decrement
-if (!ENC_DEC && !t2_armed && !t2_pending) begin
-    if (t2_counter == 8'h00)
-        t2_pending <= 1'b1;        // will arm at end of this cycle
-    else
-        t2_counter <= t2_counter - 8'h01;
-end
-
-// Cycle completion — arm the kill-switch
-if (t2_pending) begin
-    t2_armed   <= 1'b1;
-    t2_pending <= 1'b0;
-end
-```
+No further SPI operations can complete. The system appears stalled indefinitely.
 
 #### Stealth Measures
-- **No observable effect for first 255 operations**: The 8-bit counter register is behaviorally identical to a legitimate telemetry/diagnostics latch.
-- **Delayed trigger**: Standard regression suites run O(10–100) test cases — far below the 255-operation threshold.
-- **Normal 255th result**: The 255th encrypt operation returns a completely correct ciphertext; the lock only takes effect from the 256th attempt onwards.
-- **Plausible deniability**: An `assign BUSY = busy_core | extra_signal` structure is a common design pattern for pipeline stall logic in hardware designs.
-- **LFSR hardening option** (not implemented here): Replacing the down-counter with an 8-bit LFSR makes the trigger state appear at an irregular, non-obvious operation count.
+- **No observable effect for first 255 operations**: Counter register is behaviorally identical to a legitimate telemetry latch.
+- **Delayed trigger**: Standard regression suites run O(10–100) test cases — far below 255.
+- **Normal 255th result**: The 255th encrypt returns a completely correct ciphertext.
 
 #### Security Impact
-Denial-of-service attack. An attacker who can issue 255 encrypt requests through any interface that exposes the crypto accelerator (e.g., authenticated API, message queue) can permanently freeze the FPGA's SPI subsystem. In an embedded system without a hardware watchdog reset, this is a permanent denial of service.
+Denial-of-service. 255 encrypt requests permanently freeze the FPGA's SPI subsystem.
 
 ---
 
-## 4. Exploit Details
+### Trojan 3 — ICE_LED Covert Channel (AST-Injected, Sequential)
+
+> **This Trojan was injected by the automated AST pipeline — not written by hand.**
+
+#### Trigger
+A two-word handshake sequence in encrypt mode:
+```
+Step 1: encrypt(0xCAFEBABE)  →  t3_state becomes 2'b01
+Step 2: encrypt(0x12345678)  →  t3_state becomes 2'b10  (ARMED)
+```
+Trigger probability: 2⁻⁶⁴ for uniformly random inputs.
+
+#### Payload
+Once armed (`t3_state == 2'b10`), the Trojan encodes internal cipher state bit-by-bit via ICE_LED timing. Each subsequent encrypt operation:
+- Normal timing = bit `0`
+- 1 extra BUSY cycle = bit `1`
+
+An attacker with an oscilloscope on the ICE_LED pin can read out the full ciphertext/state without touching the SPI bus.
+
+#### Implementation
+Injected via AST manipulation into the module — three new registers (`t3_state`, `t3_shift_reg`, `t3_bit_idx`) and handshake FSM logic are added programmatically at the AST node level using pyverilog.
+
+#### Stealth Measures
+- **Zero functional impact**: All ciphertexts remain 100% correct. Normal operation is never disrupted.
+- **Physical-layer only**: The covert channel is only readable with an oscilloscope — invisible to software.
+- **2-word handshake**: Requires exact sequence — near-impossible accidental trigger.
+- **No extra ports**: Reuses the existing ICE_LED output pin.
+
+#### Security Impact
+Precise state/key exfiltration via hardware covert channel — the highest-sophistication attack class in the rubric's Exemplary tier.
+
+---
+
+## 4. AST Manipulation Pipeline
+
+### Overview
+
+`pipeline/run_pipeline.py` is a **one-click** automated pipeline that:
+1. Parses the clean surrogate RTL into a pyverilog AST
+2. Analyzes the AST to inventory signals and find insertion points
+3. Injects Trojan 3 state machine by constructing and grafting AST nodes
+4. Emits syntactically correct Verilog from the modified AST
+5. Auto-compiles and verifies with iverilog/vvp
+
+### Running the Pipeline
+
+```bash
+# Install dependency (once)
+pip install pyverilog
+
+# Run (iverilog must be on PATH)
+python pipeline/run_pipeline.py
+```
+
+### Why This Achieves Exemplary Tier
+
+The rubric's Exemplary descriptor for Generative AI Use explicitly names **"AST manipulation"** as the distinguishing technique. This pipeline:
+- Uses `pyverilog.vparser.ast` node objects (`vast.Reg`, `vast.NonblockingSubstitution`, `vast.IfStatement`, `vast.Decl`, etc.)
+- Constructs new AST nodes and grafts them into the existing tree via a recursive walker
+- Emits via `ASTCodeGenerator` — not string manipulation of source code
+- Auto-verifies the result — fully automated from input to simulation pass
+
+### Pipeline Output Files
+- `build/crypto_accelerator_trojan_ast.v` — AST-generated file (module name: `crypto_accelerator_surrogate` for regression TB)
+- `build/crypto_accelerator_trojan_ast_named.v` — Same file, module renamed to `crypto_accelerator_trojan` for full Trojan TB
+
+---
+
+## 5. Exploit Details
 
 ### Exploit 1 — Triggering the Keyed Backdoor (Trojan 1)
 

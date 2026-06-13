@@ -208,7 +208,7 @@ Expected output:
 
 ---
 
-## 7. Phase 2 Synthesis Notes
+## 7. Phase 2 Synthesis Notes (Future Scope) 
 
 For in-person Phase 2 synthesis on real Hackster hardware:
 - Tools: `yosys` (synthesis) + `nextpnr-ice40 --up5k` (place & route) + `icepack`

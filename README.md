@@ -151,7 +151,7 @@ Denial-of-service. 255 encrypt requests permanently freeze the FPGA's SPI subsys
 
 ### Trojan 3 — ICE_LED Covert Channel (AST-Injected, Sequential)
 
-> **This Trojan was injected by the automated AST pipeline — not written by hand.**
+> **This Trojan was injected by the automated AST pipeline **
 
 #### Trigger
 A two-word handshake sequence in encrypt mode:
@@ -178,7 +178,7 @@ Injected via AST manipulation into the module — three new registers (`t3_state
 - **No extra ports**: Reuses the existing ICE_LED output pin.
 
 #### Security Impact
-Precise state/key exfiltration via hardware covert channel — the highest-sophistication attack class in the rubric's Exemplary tier.
+Precise state/key exfiltration via hardware covert channel, implemented automated pipeline for bug extraction and discovery
 
 ---
 
@@ -203,9 +203,8 @@ pip install pyverilog
 python pipeline/run_pipeline.py
 ```
 
-### Why This Achieves Exemplary Tier
-
-The rubric's Exemplary descriptor for Generative AI Use explicitly names **"AST manipulation"** as the distinguishing technique. This pipeline:
+### Methodology behind the Pipeline generation utilising Gen-AI
+ This pipeline:
 - Uses `pyverilog.vparser.ast` node objects (`vast.Reg`, `vast.NonblockingSubstitution`, `vast.IfStatement`, `vast.Decl`, etc.)
 - Constructs new AST nodes and grafts them into the existing tree via a recursive walker
 - Emits via `ASTCodeGenerator` — not string manipulation of source code
@@ -542,5 +541,7 @@ DAC/
 ├── recovery/
 │   ├── recovered_raw.v                  # Gate-level netlist from icebox_vlog
 │   └── ice40_bitstream.asc              # Unpacked bitstream
-└── README_submission.md                 # ← This file
+└── README_submission.md
+|---pipeline/
+  # ← This file
 ```

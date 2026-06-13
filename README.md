@@ -203,9 +203,9 @@ pip install pyverilog
 python pipeline/run_pipeline.py
 ```
 
-### Why This Achieves Exemplary Tier
+### Methadology behind the AST Pipeline
 
-The rubric's Exemplary descriptor for Generative AI Use explicitly names **"AST manipulation"** as the distinguishing technique. This pipeline:
+ An AST Pipeline is to be designed utilising Gen-AI capabilities for smooth integration and testing for bug bounty test cases, the following is the design methadology
 - Uses `pyverilog.vparser.ast` node objects (`vast.Reg`, `vast.NonblockingSubstitution`, `vast.IfStatement`, `vast.Decl`, etc.)
 - Constructs new AST nodes and grafts them into the existing tree via a recursive walker
 - Emits via `ASTCodeGenerator` — not string manipulation of source code

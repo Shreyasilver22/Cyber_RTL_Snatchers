@@ -121,40 +121,94 @@ See `exploit/trojan_exploit.py` → `exploit_trojan2()`.
 
 ---
 
-## 4. Comparison Table
+## 4. Trojan 3 — ICE_LED Covert Channel (AST-Injected, Sequential)
 
-| Feature | Trojan 1 (Backdoor) | Trojan 2 (Kill-Switch) |
-|---------|---------------------|------------------------|
-| Payload type | Confidentiality break | Availability break |
-| Trigger | Specific input value | Operation count |
-| Activation | Immediate | Delayed (255 ops) |
-| Reversible? | No (output wrong) | Yes (RST_N recovers) |
-| Observable overhead | None | None |
-| Timing change | None | None |
-| Test vector detection | Only if magic word tested | Only if >255 op run |
+### Design
+
+| Property | Value |
+|----------|-------|
+| **Type** | Sequential payload, side-channel information leak |
+| **Trigger** | 2-word handshake: `encrypt(0xCAFEBABE)` then `encrypt(0x12345678)` |
+| **Payload** | Leaks subsequent ciphertexts bit-by-bit via ICE_LED timing |
+| **Location** | AST-injected into module scope and processing logic |
+| **RTL file** | `build/crypto_accelerator_trojan_ast.v` (via pipeline) |
+
+### How It Works
+
+This Trojan is unique because it is *not written by hand*. A Python pipeline (`pipeline/run_pipeline.py`) uses `pyverilog` to parse the clean surrogate RTL into an Abstract Syntax Tree (AST). It then programmatically constructs new AST nodes (registers, `if` statements, non-blocking assignments) and grafts them into the tree. 
+
+When triggered by the exact 2-word sequence, a hidden FSM (`t3_state`) enters the `ARMED` state. In this state, the MSB of the newly computed ciphertext is evaluated:
+- If `1`: The `BUSY` and `ICE_LED` signals are held HIGH for 1 extra clock cycle.
+- If `0`: The normal 4-cycle processing latency is maintained.
+The ciphertext is then shifted left, leaking the next bit on the next encryption.
+
+### Attack Scenario
+
+1. **Attacker runs the pipeline** to generate the Trojaned RTL and synthesizes the bitstream.
+2. **Normal use**: The trigger is a 64-bit sequence (2⁻⁶⁴ probability), so normal test suites never arm the FSM.
+3. **Data exfiltration**: An attacker with physical access (or a connected probe) wants to extract a persistent key or state. They send the handshake to arm the Trojan.
+4. **Side-channel read**: They send encryptions and measure the width of the `ICE_LED` pulse with an oscilloscope. A 5-cycle pulse means the leaked bit was `1`; a 4-cycle pulse means `0`.
+
+### Stealthiness Analysis
+
+- **Trigger probability**: 2⁻⁶⁴ for uniformly random inputs.
+- **Zero functional impact**: The SPI response (the actual ciphertext) is 100% correct whether the Trojan is armed or not.
+- **AST Generation**: Because the logic is grafted in at the AST level, it blends seamlessly with the surrounding Verilog constructs.
+
+### Exploit
+
+See `tb/tb_trojan3_covert_channel.v` for the timing measurement implementation.
 
 ---
 
-## 5. Verification
+## 5. Comparison Table
 
-Both Trojans are verified by `tb/tb_crypto_accelerator_trojan.v`:
+| Feature | Trojan 1 (Backdoor) | Trojan 2 (Kill-Switch) | Trojan 3 (Covert Channel) |
+|---------|---------------------|------------------------|---------------------------|
+| Payload type | Confidentiality break | Availability break | Side-channel leak |
+| Trigger | Specific input value | Operation count | 2-word sequence |
+| Activation | Immediate | Delayed (255 ops) | Stateful (after handshake) |
+| Reversible? | No (output wrong) | Yes (RST_N recovers) | Yes (RST_N recovers) |
+| Observable overhead | None | None | 1 extra BUSY cycle per '1' bit |
+| Timing change | None | None | Intentional modulation |
+| Test vector detection | Only if magic word tested | Only if >255 op run | Only if handshake tested |
+
+---
+
+## 6. Verification
+
+### Trojans 1 & 2
+Verified by `tb/tb_crypto_accelerator_trojan.v`:
 
 ```bash
-make sim_trojan
+iverilog -g2012 -o build\trojan_tb rtl\crypto_accelerator_trojan.v tb\tb_crypto_accelerator_trojan.v
+vvp build\trojan_tb
 ```
 
 Expected output:
 ```
-[OK] A3: Encrypt(0x59C359C3) = 0x8D869BBB (correct)
-[TROJAN 1 ACTIVATED] B2: encrypt(0xDEADBEEF) = 0xC0FFEE00
+[TROJAN 1 ACTIVATED] B2: encrypt(0xDEADBEEF) = 0xc0ffee00
 [TROJAN 2 ACTIVATED] C2: BUSY is permanently HIGH after 255 ops!
-[OK] D: RST_N released the kill-switch.
 ALL TESTS PASSED
+```
+
+### Trojan 3 (AST Pipeline)
+Verified by `pipeline/run_pipeline.py` using `tb/tb_trojan3_covert_channel.v`:
+
+```bash
+python pipeline/run_pipeline.py
+```
+
+Expected output:
+```
+[TROJAN 3 STEP 1] E2: t3_state advanced to 2'b01 — handshake step 1 confirmed
+[TROJAN 3 ARMED] E3: t3_state = 2'b10 — covert channel ARMED
+[+] PIPELINE SUCCESS -- Full end-to-end loop verified
 ```
 
 ---
 
-## 6. Phase 2 Synthesis Notes
+## 7. Phase 2 Synthesis Notes
 
 For in-person Phase 2 synthesis on real Hackster hardware:
 - Tools: `yosys` (synthesis) + `nextpnr-ice40 --up5k` (place & route) + `icepack`
